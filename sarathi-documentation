@@ -1,0 +1,63 @@
+# SARATHI — Local Privacy-Centric Academic Support Portal
+**Complete Technical Documentation (SRS, System Architecture, Algorithms & Test Report)**
+
+---
+
+## 1. Project Overview & Problem Statement
+Students often discover academic decline only after major examinations, leaving minimal time for targeted recovery. Existing cloud analytics platforms introduce data-privacy risks by uploading sensitive student records to external servers.
+
+**SARATHI** addresses both challenges as a self-contained, local-first academic support portal running on `127.0.0.1` using Python's standard library and SQLite. It combines early subject-level trend detection, transparent Ridge Regression score estimation, priority-weighted weekly study planning, and real-time one-to-one mentor chat without external cloud dependencies.
+
+---
+
+## 2. Software Requirements Specification (SRS)
+
+### 2.1 User Roles & Functional Requirements
+* **Administrator (Local Provisioning):** Creates and manages verified Mentor accounts locally; public sign-up cannot assign Mentor privileges.
+* **Mentor:**
+  * Uploads de-identified cohort CSV datasets (`attendance`, `assignment_completion`, `study_hours`, `consistency`, `confidence`, `final_score`) to train and evaluate the Ridge Regression model in memory.
+  * Communicates privately with assigned students via real-time live chat.
+* **Student:**
+  * Self-registers an isolated student account.
+  * Logs and manages subject exam scores and views subject-wise averages and capped linear trends ($\ge 3$ records, capped at $\pm 10$ points).
+  * Runs ephemeral score estimations using current study habits alongside holdout error metrics (`MAE`, `RMSE`, $R^2$, baseline `MAE`) and a mandatory limitation notice.
+  * Generates and saves weekly study schedules split across **Concepts (30%)**, **Practice (35%)**, **Revision (20%)**, and **Review (15%)**, prioritizing lower-scoring subjects.
+  * Messages mentors one-to-one in real time.
+
+### 2.2 Non-Functional & Security Requirements
+* **Local Loopback Binding:** Runs strictly on `127.0.0.1:8000` with zero third-party runtime dependencies.
+* **Authentication & Session Hardening:** Passwords hashed with salted `PBKDF2-HMAC-SHA256` (100,000 iterations); 12-hour sessions issued via hashed opaque tokens in `HttpOnly`, `SameSite=Lax` cookies.
+* **Request Protection:** Enforces CSRF tokens (`X-CSRF-Token`), same-origin checks, and endpoint rate-limiting on sign-in and registration.
+* **Strict Data Minimization:** Raw mentor-uploaded CSV rows and student prediction inputs are processed strictly in memory and never written to disk.
+
+---
+
+## 3. System Architecture & SQLite Schema
+
+SARATHI follows a 3-layer same-origin architecture:
+1. **Presentation Layer:** Semantic HTML5, CSS3, and vanilla JavaScript (`fetch` + `EventSource` SSE client).
+2. **Application Layer (`server.py`):** Multi-threaded Python HTTP server (`ThreadingHTTPServer`) handling authentication, RBAC, Ridge regression fitting, trend math, study allocation, and SSE streaming.
+3. **Persistence Layer (`sarathi.db`):** Auto-initialized local SQLite database storing:
+   * `users` (`id`, `email`, `display_name`, `role`, `password_hash`, `salt`, `created_at`)
+   * `sessions` (`token_hash`, `user_id`, `csrf_token`, `expires_at`)
+   * `marks` (`id`, `student_id`, `subject`, `assessment_name`, `score`, `created_at`)
+   * `study_plans` (`student_id`, `weekly_hours`, `plan_json`, `updated_at`)
+   * `model_state` (`id`, `weights_json`, `means_json`, `stds_json`, `metrics_json`, `updated_at`, `updated_by`)
+   * `messages` (`id`, `sender_id`, `receiver_id`, `content`, `created_at`)
+
+---
+
+## 4. Verification & Test Report Summary
+
+| Test ID | Module | Test Scenario | Verified Result |
+| :--- | :--- | :--- | :--- |
+| **TC-01** | Auth & Roles | Public registration attempt with `mentor` role injection | Creates `student` role only; password stored as `PBKDF2-HMAC-SHA256` hash. |
+| **TC-02** | Admin Provisioning | Local Admin creates a Mentor account and signs in | Mentor account provisioned in SQLite with access to CSV model trainer. |
+| **TC-03** | Security Hardening | Repeated failed logins and `POST` without valid CSRF token | Rate-limiting triggers; missing CSRF or cross-origin requests return `403`. |
+| **TC-04** | Account Isolation | Student A attempts to view or delete Student B's records | Access denied; queries strictly scoped to authenticated `student_id`. |
+| **TC-05** | Grade Trends | Log 2 marks in Subject X and 3 marks (sharp jump) in Subject Y | Subject X shows no trend; Subject Y shows linear trend capped at $\pm 10$ pts. |
+| **TC-06** | Ridge Regression | Mentor uploads valid 6-column de-identified CSV | Fits on deterministic 80/20 split; publishes `MAE`, `RMSE`, $R^2$, baseline `MAE`. |
+| **TC-07** | Data Minimization | Inspect `sarathi.db` after CSV training and score estimation | Only weights & metrics saved; zero raw CSV rows or student inputs on disk. |
+| **TC-08** | Score Estimator | Student submits study-context features | Returns instant score estimate + holdout error metrics + limitation notice. |
+| **TC-09** | Study Planner | Student generates weekly plan with uneven subject averages | Allocates higher hours to weaker subjects across Concepts/Practice/Revision/Review. |
+| **TC-10** | Live Mentor Chat | Student and Mentor exchange messages in active browser sessions | Delivered instantaneously via authenticated SSE and persisted in SQLite. |
